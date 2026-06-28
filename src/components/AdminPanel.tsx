@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, addDoc, updateDoc, deleteDoc, doc, getDocs, query, orderBy, getDoc, setDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { BlogPost, Project, BlogCategory, Profile, Milestone } from '../types';
-import { Plus, Edit2, Trash2, X, Sparkles, Check, Newspaper, FolderGit2, User, Bold, Italic, Heading1, Heading2, Code, Quote, Link, Image as ImageIcon, Eye, Camera, Music, Radio, ListMusic, AlertCircle, Briefcase } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, Sparkles, Check, Newspaper, FolderGit2, User, Bold, Italic, Heading1, Heading2, Code, Quote, Link, Image as ImageIcon, Eye, Camera, Music, Radio, ListMusic, AlertCircle, Briefcase, Upload } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 
 interface AdminPanelProps {
@@ -63,6 +63,7 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
   const [galleryComment, setGalleryComment] = useState('');
   const [galleryLocation, setGalleryLocation] = useState('');
   const [galleryItems, setGalleryItems] = useState<any[]>([]);
+  const [isCompilingImage, setIsCompilingImage] = useState(false);
 
   // Playlist Config states
   const [playlistIdInput, setPlaylistIdInput] = useState('PLMC9KNkIncKseYxEr26u6Cx61-Vq5yLAL');
@@ -427,34 +428,120 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
     }
   };
 
-  // Submit Gallery Item
+  // Helper function to compress images using HTML Canvas before storing as Base64 in Firestore
+  const compressImage = (file: File, maxWidth: number = 1000, quality: number = 0.7): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target?.result as string;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(event.target?.result as string);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/jpeg', quality);
+          resolve(dataUrl);
+        };
+        img.onerror = (err) => reject(err);
+      };
+      reader.onerror = (err) => reject(err);
+    });
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsCompilingImage(true);
+    try {
+      const dataUrl = await compressImage(file);
+      setGalleryImageUrl(dataUrl);
+      triggerNotification('이미지 파일이 성공적으로 업로드 및 압축 변환되었습니다.');
+    } catch (err) {
+      console.error('Error compiling image:', err);
+      triggerError('이미지 처리 중 오류가 발생했습니다.');
+    } finally {
+      setIsCompilingImage(false);
+    }
+  };
+
+  const startEditGallery = (item: any) => {
+    setGalleryId(item.id);
+    setGalleryImageUrl(item.imageUrl || '');
+    setGalleryTitle(item.title || '');
+    setGalleryComment(item.comment || '');
+    setGalleryLocation(item.location || '');
+  };
+
+  const clearGalleryForm = () => {
+    setGalleryId(null);
+    setGalleryImageUrl('');
+    setGalleryTitle('');
+    setGalleryComment('');
+    setGalleryLocation('');
+  };
+
+  // Submit Gallery Item (Supports both Create & Update)
   const handleGallerySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       if (!galleryImageUrl.trim()) {
-        alert('이미지 URL을 입력해주세요.');
+        alert('이미지 URL을 입력하거나 이미지 파일을 선택해 주세요.');
         return;
       }
-      const itemData = {
-        title: galleryTitle || '풍경 및 기념 사진',
-        imageUrl: galleryImageUrl,
-        comment: galleryComment || '',
-        location: galleryLocation || '',
-        likes: 0,
-        comments: [],
-        createdAt: Date.now()
-      };
-      await addDoc(collection(db, 'gallery'), itemData);
-      triggerNotification('갤러리 이미지가 성공적으로 업로드되었습니다.');
+      
+      if (galleryId) {
+        // Edit flow
+        const docRef = doc(db, 'gallery', galleryId);
+        const originalItem = galleryItems.find(item => item.id === galleryId);
+        const itemData = {
+          title: galleryTitle || '풍경 및 기념 사진',
+          imageUrl: galleryImageUrl,
+          comment: galleryComment || '',
+          location: galleryLocation || '',
+          likes: originalItem?.likes || 0,
+          comments: originalItem?.comments || [],
+          createdAt: originalItem?.createdAt || Date.now()
+        };
+        await updateDoc(docRef, itemData);
+        triggerNotification('갤러리 이미지가 성공적으로 수정되었습니다.');
+      } else {
+        // Create flow
+        const itemData = {
+          title: galleryTitle || '풍경 및 기념 사진',
+          imageUrl: galleryImageUrl,
+          comment: galleryComment || '',
+          location: galleryLocation || '',
+          likes: 0,
+          comments: [],
+          createdAt: Date.now()
+        };
+        await addDoc(collection(db, 'gallery'), itemData);
+        triggerNotification('갤러리 이미지가 성공적으로 업로드되었습니다.');
+      }
+      
       // Reset
-      setGalleryImageUrl('');
-      setGalleryTitle('');
-      setGalleryComment('');
-      setGalleryLocation('');
+      clearGalleryForm();
       fetchData();
     } catch (err: any) {
       console.error('Error submitting gallery:', err);
-      alert('갤러리 등록 실패: 관리자 권한이 없거나 오류가 발생했습니다. ' + (err?.message || err));
+      alert('갤러리 저장 실패: 관리자 권한이 없거나 오류가 발생했습니다. ' + (err?.message || err));
     }
   };
 
@@ -463,6 +550,9 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
       try {
         await deleteDoc(doc(db, 'gallery', id));
         triggerNotification('갤러리 사진이 삭제되었습니다.');
+        if (galleryId === id) {
+          clearGalleryForm();
+        }
         fetchData();
       } catch (err: any) {
         console.error('Error deleting gallery item:', err);
@@ -1644,13 +1734,24 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* 1. Add Photo Form */}
+                {/* 1. Add/Edit Photo Form */}
                 <div className={`p-6 rounded-2xl border h-fit ${
                   theme === 'light' ? 'bg-white border-neutral-200' : 'bg-neutral-900 border-neutral-800'
                 }`}>
-                  <h4 className="text-sm font-bold font-sans mb-4 flex items-center gap-1.5">
-                    <Camera size={16} className="text-emerald-500" />
-                    새 사진 등록하기
+                  <h4 className="text-sm font-bold font-sans mb-4 flex items-center justify-between gap-1.5">
+                    <span className="flex items-center gap-1.5">
+                      <Camera size={16} className="text-emerald-500" />
+                      {galleryId ? '사진 정보 수정하기' : '새 사진 등록하기'}
+                    </span>
+                    {galleryId && (
+                      <button
+                        type="button"
+                        onClick={clearGalleryForm}
+                        className="text-[10px] text-neutral-500 hover:text-neutral-700 underline cursor-pointer"
+                      >
+                        새로 등록하기
+                      </button>
+                    )}
                   </h4>
                   <form onSubmit={handleGallerySubmit} className="space-y-4">
                     <div>
@@ -1668,18 +1769,76 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                     </div>
 
                     <div>
-                      <label className="block text-xs font-mono uppercase tracking-wider text-neutral-500 mb-1">이미지 주소 (Image URL)</label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="https://images.unsplash.com/..."
-                        value={galleryImageUrl}
-                        onChange={(e) => setGalleryImageUrl(e.target.value)}
-                        className={`w-full px-3 py-2.5 rounded-xl text-xs font-sans border focus:outline-none ${
-                          theme === 'light' ? 'bg-white border-neutral-200 focus:border-neutral-900' : 'bg-neutral-950 border-neutral-850 focus:border-white'
-                        }`}
-                      />
+                      <label className="block text-xs font-mono uppercase tracking-wider text-neutral-500 mb-1.5">
+                        이미지 선택 (파일 업로드 또는 주소 입력)
+                      </label>
+                      
+                      {/* File Upload Option */}
+                      <div className="mb-3">
+                        <label 
+                          className={`flex flex-col items-center justify-center py-5 px-3 border-2 border-dashed rounded-xl cursor-pointer transition-colors text-center ${
+                            theme === 'light' 
+                              ? 'bg-neutral-50 border-neutral-200 hover:bg-neutral-100' 
+                              : 'bg-neutral-950 border-neutral-850 hover:bg-neutral-900'
+                          }`}
+                        >
+                          <Upload size={18} className="text-neutral-400 mb-1" />
+                          <span className="text-[11px] font-sans text-neutral-500">
+                            {isCompilingImage ? '이미지 처리/압축 중...' : '기기에서 이미지 파일 선택'}
+                          </span>
+                          <span className="text-[9px] font-mono text-neutral-400 mt-0.5">JPG, PNG, GIF 등 (자동 용량 최적화)</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleFileChange}
+                            className="hidden"
+                            disabled={isCompilingImage}
+                          />
+                        </label>
+                      </div>
+
+                      {/* URL input Option */}
+                      <div>
+                        <div className="text-[10px] text-neutral-400 font-sans mb-1">또는 이미지 주소(URL) 직접 입력</div>
+                        <input
+                          type="text"
+                          required={!galleryImageUrl}
+                          placeholder="https://images.unsplash.com/..."
+                          value={galleryImageUrl.startsWith('data:image/') ? '(이미지 파일 업로드됨)' : galleryImageUrl}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val !== '(이미지 파일 업로드됨)') {
+                              setGalleryImageUrl(val);
+                            }
+                          }}
+                          className={`w-full px-3 py-2.5 rounded-xl text-xs font-sans border focus:outline-none ${
+                            theme === 'light' ? 'bg-white border-neutral-200 focus:border-neutral-900' : 'bg-neutral-950 border-neutral-850 focus:border-white'
+                          }`}
+                        />
+                      </div>
                     </div>
+
+                    {galleryImageUrl && (
+                      <div className="space-y-1">
+                        <span className="block text-xs font-mono uppercase tracking-wider text-neutral-500 mb-1">이미지 미리보기</span>
+                        <div className="relative rounded-xl overflow-hidden border border-neutral-500/10 aspect-video bg-neutral-100 dark:bg-neutral-950">
+                          <img 
+                            src={galleryImageUrl} 
+                            alt="Preview" 
+                            className="w-full h-full object-cover" 
+                            referrerPolicy="no-referrer"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setGalleryImageUrl('')}
+                            className="absolute top-2 right-2 p-1.5 bg-red-500 hover:bg-red-600 text-white rounded-lg cursor-pointer transition-colors shadow-md"
+                            title="이미지 비우기"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     <div>
                       <label className="block text-xs font-mono uppercase tracking-wider text-neutral-500 mb-1">촬영 장소 (Location)</label>
@@ -1709,12 +1868,21 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
 
                     <button
                       type="submit"
-                      className={`w-full py-3 rounded-xl text-xs font-sans font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-opacity hover:opacity-95 ${
+                      disabled={isCompilingImage}
+                      className={`w-full py-3 rounded-xl text-xs font-sans font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-all hover:opacity-95 ${
+                        isCompilingImage ? 'opacity-50 cursor-not-allowed' : ''
+                      } ${
                         theme === 'light' ? 'bg-[#222222] text-[#FAF9F6]' : 'bg-[#FAF9F6] text-[#222222]'
                       }`}
                     >
-                      <Plus size={14} />
-                      갤러리 사진 등록
+                      {isCompilingImage ? (
+                        <div className="w-4 h-4 border-2 border-t-transparent border-current rounded-full animate-spin" />
+                      ) : galleryId ? (
+                        <Check size={14} />
+                      ) : (
+                        <Plus size={14} />
+                      )}
+                      {isCompilingImage ? '이미지 처리 중...' : galleryId ? '사진 정보 수정 완료' : '갤러리 사진 등록'}
                     </button>
                   </form>
                 </div>
@@ -1735,7 +1903,7 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                           key={item.id} 
                           className={`group relative rounded-xl overflow-hidden border flex flex-col justify-between ${
                             theme === 'light' ? 'bg-white border-neutral-200' : 'bg-neutral-900 border-neutral-800'
-                          }`}
+                          } ${galleryId === item.id ? 'ring-2 ring-emerald-500' : ''}`}
                         >
                           <div className="aspect-square relative overflow-hidden bg-neutral-100">
                             <img 
@@ -1744,18 +1912,28 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                               className="w-full h-full object-cover transition-transform group-hover:scale-105"
                               referrerPolicy="no-referrer"
                             />
-                            <button
-                              type="button"
-                              onClick={() => deleteGalleryItem(item.id)}
-                              className="absolute top-2 right-2 p-1.5 bg-red-500 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 cursor-pointer shadow-md"
-                              title="삭제"
-                            >
-                              <Trash2 size={13} />
-                            </button>
+                            <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                type="button"
+                                onClick={() => startEditGallery(item)}
+                                className="p-1.5 bg-[#FAF9F6] text-[#222222] dark:bg-[#222222] dark:text-[#FAF9F6] rounded-lg transition-all hover:scale-105 cursor-pointer shadow-md"
+                                title="수정"
+                              >
+                                <Edit2 size={13} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => deleteGalleryItem(item.id)}
+                                className="p-1.5 bg-red-500 text-white rounded-lg transition-all hover:bg-red-600 cursor-pointer shadow-md"
+                                title="삭제"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
                           </div>
                           <div className="p-3">
                             <h5 className="text-[11px] font-bold font-sans truncate">{item.title}</h5>
-                            <p className="text-[9px] text-neutral-400 font-mono truncate">{item.location || '위치 미지정'}</p>
+                            <p className="text-[9px] text-neutral-400 font-sans truncate">{item.location || '위치 미지정'}</p>
                           </div>
                         </div>
                       ))}
