@@ -1,0 +1,6 @@
+{
+  "name": "배건우 포트폴리오",
+  "description": "배건우의 개인 포트폴리오, 블로그 및 프로젝트 관리 웹사이트",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
