@@ -13,8 +13,8 @@ interface LandingTabProps {
 
 export default function LandingTab({ theme, profile, onNavigate }: LandingTabProps) {
   const name = profile?.name || '배건우';
-  const title = profile?.title || 'Interactive Full-Stack Dev';
-  const bio = profile?.bio || '아름다운 인터랙션과 타협 없는 안정성을 지향하는 풀스택 개발자 배건우입니다. 사용자가 감동하는 정교한 프론트엔드와 최적화된 백엔드 시스템을 하나로 연결합니다.';
+  const title = profile?.title || 'GAME DEVELOPER';
+  const bio = profile?.bio || '';
   const imageUrl = profile?.imageUrl || '';
   const githubUrl = profile?.githubUrl || 'https://github.com/ZakByeol';
   const email = profile?.email || 'macaron010@naver.com';
