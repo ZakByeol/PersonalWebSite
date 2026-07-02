@@ -7,3 +7,7 @@ coverage/
 .env*
 .env.example
 README.md
+assets/
+
+src/firebase.ts
+/firebase-applet-config.json
