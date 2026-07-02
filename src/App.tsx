@@ -3,6 +3,7 @@ import { onAuthStateChanged, User, signOut } from 'firebase/auth';
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { ActiveTab, Theme, Profile } from './types';
+import { AnimatePresence } from 'motion/react';
 
 // Components
 import CanvasBackground from './components/CanvasBackground';
@@ -416,12 +417,14 @@ export default function App() {
       )}
 
       {/* Creator Studio Control Hub Overlay */}
-      {isAdminPanelOpen && (
-        <AdminPanel 
-          theme={theme}
-          onClose={() => setIsAdminPanelOpen(false)} 
-        />
-      )}
+      <AnimatePresence>
+        {isAdminPanelOpen && (
+          <AdminPanel 
+            theme={theme}
+            onClose={() => setIsAdminPanelOpen(false)} 
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

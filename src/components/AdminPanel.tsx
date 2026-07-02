@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { collection, addDoc, updateDoc, deleteDoc, doc, getDocs, query, orderBy, getDoc, setDoc } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, getDocs, query, orderBy, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType, storage } from '../firebase';
 import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { BlogPost, Project, BlogCategory, Profile, Milestone } from '../types';
-import { Plus, Edit2, Trash2, X, Sparkles, Check, Newspaper, FolderGit2, User, Bold, Italic, Heading1, Heading2, Code, Quote, Link, Image as ImageIcon, Eye, Camera, Music, Radio, ListMusic, AlertCircle, Briefcase, Upload } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, Sparkles, Check, Newspaper, FolderGit2, User, Bold, Italic, Heading1, Heading2, Code, Quote, Link, Image as ImageIcon, Eye, Camera, Music, Radio, ListMusic, AlertCircle, Briefcase, Upload, Maximize2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import MarkdownRenderer from './MarkdownRenderer';
 
 interface AdminPanelProps {
@@ -95,6 +96,13 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [showPublishSheet, setShowPublishSheet] = useState(false);
   const [showProjectPublishSheet, setShowProjectPublishSheet] = useState(false);
+  const [fullPreviewType, setFullPreviewType] = useState<'blog' | 'project' | null>(null);
+
+  // Dynamic Category States
+  const [categoriesList, setCategoriesList] = useState<string[]>(['개발일지', '일상', '작품감상평']);
+  const [customCategories, setCustomCategories] = useState<{ id: string; name: string }[]>([]);
+  const [newCategoryInput, setNewCategoryInput] = useState('');
+  const [isAddingNewCategory, setIsAddingNewCategory] = useState(false);
 
   // Custom Confirm Modal State
   const [confirmModal, setConfirmModal] = useState<{
@@ -211,7 +219,85 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
 
   useEffect(() => {
     fetchData();
+
+    // Listen to custom categories collection in real time
+    const unsubscribeCategories = onSnapshot(collection(db, 'categories'), (snapshot) => {
+      if (!snapshot.empty) {
+        const customCats: { id: string; name: string }[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          if (data && data.name) {
+            customCats.push({ id: docSnap.id, name: data.name });
+          }
+        });
+        setCustomCategories(customCats);
+
+        const list = customCats.map(c => c.name);
+        const merged = Array.from(new Set(['개발일지', '일상', '작품감상평', ...list])).filter(Boolean);
+        setCategoriesList(merged);
+      } else {
+        setCustomCategories([]);
+        setCategoriesList(['개발일지', '일상', '작품감상평']);
+      }
+    }, (err) => {
+      console.warn('Error listening to categories:', err);
+    });
+
+    return () => {
+      unsubscribeCategories();
+    };
   }, []);
+
+  const handleAddCategory = async () => {
+    const name = newCategoryInput.trim();
+    if (!name) return;
+    if (categoriesList.includes(name)) {
+      triggerError('이미 존재하는 카테고리입니다.');
+      return;
+    }
+    try {
+      await addDoc(collection(db, 'categories'), { name });
+      setNewCategoryInput('');
+      setIsAddingNewCategory(false);
+      setBlogCategory(name); // Auto-select the newly added category
+      triggerNotification(`'${name}' 카테고리가 추가되었습니다.`);
+    } catch (err) {
+      console.error('Error adding category:', err);
+      triggerError('카테고리 추가 실패: 권한이 없거나 오류가 발생했습니다.');
+    }
+  };
+
+  const handleDeleteCategory = async (name: string) => {
+    if (['개발일지', '일상', '작품감상평'].includes(name)) {
+      triggerError('기본 카테고리는 삭제할 수 없습니다.');
+      return;
+    }
+
+    const target = customCategories.find(c => c.name === name);
+    if (!target) {
+      triggerError('삭제할 카테고리를 찾을 수 없습니다.');
+      return;
+    }
+
+    setConfirmModal({
+      isOpen: true,
+      title: '카테고리 삭제',
+      message: `'${name}' 카테고리를 삭제하시겠습니까? 해당 카테고리가 지정된 기존 글은 카테고리 정보가 유지되거나 다른 카테고리로 변경될 때까지 필터링에서 제외될 수 있습니다.`,
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'categories', target.id));
+          triggerNotification(`'${name}' 카테고리가 삭제되었습니다.`);
+          if (blogCategory === name) {
+            setBlogCategory('개발일지');
+          }
+        } catch (err) {
+          console.error('Error deleting category:', err);
+          triggerError('카테고리 삭제 실패: 권한이 없거나 오류가 발생했습니다.');
+        }
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+      }
+    });
+  };
 
   const triggerNotification = (message: string) => {
     setActionSuccess(message);
@@ -844,10 +930,20 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-md z-50 flex items-center justify-center">
-      <div 
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.25 }}
+      className="fixed inset-0 bg-black/60 backdrop-blur-md z-50 flex items-center justify-center"
+    >
+      <motion.div 
         id="admin-management-panel"
-        className={`w-full h-full flex flex-col overflow-hidden transition-all duration-300 ${
+        initial={{ y: '100%' }}
+        animate={{ y: 0 }}
+        exit={{ y: '100%' }}
+        transition={{ type: 'spring', damping: 24, stiffness: 150 }}
+        className={`w-full h-full flex flex-col overflow-hidden ${
           theme === 'light' 
             ? 'bg-[#FAF9F6] text-[#222222]' 
             : 'bg-[#222222] text-[#FAF9F6]'
@@ -1176,7 +1272,7 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                       <span className="text-[11px] font-sans">사진 파일 첨부</span>
                     </button>
 
-                    <div className="ml-auto flex items-center gap-1">
+                    <div className="ml-auto flex items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => setShowPreview(prev => !prev)}
@@ -1188,6 +1284,15 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                       >
                         <Eye size={13} />
                         미리보기 {showPreview ? 'ON' : 'OFF'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFullPreviewType('blog')}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-sans transition-all cursor-pointer bg-neutral-500/10 text-neutral-400 hover:bg-neutral-500/20 hover:text-inherit"
+                        title="전체화면 미리보기"
+                      >
+                        <Maximize2 size={13} />
+                        크게 보기
                       </button>
                     </div>
                   </div>
@@ -1383,18 +1488,103 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
 
                           {/* Category select */}
                           <div>
-                            <label className="block text-xs font-mono uppercase tracking-wider text-neutral-500 mb-2">카테고리</label>
-                            <select
-                              value={blogCategory}
-                              onChange={(e) => setBlogCategory(e.target.value as BlogCategory)}
-                              className={`w-full px-4 py-3 rounded-xl text-sm font-sans border focus:outline-none ${
-                                theme === 'light' ? 'bg-white border-neutral-200 focus:border-neutral-950' : 'bg-neutral-900 border-neutral-800 focus:border-white'
-                              }`}
-                            >
-                              <option value="개발일지">개발일지 💻</option>
-                              <option value="일상">일상 ☕</option>
-                              <option value="작품감상평">작품감상평 🎨</option>
-                            </select>
+                            <div className="flex items-center justify-between mb-2">
+                              <label className="block text-xs font-mono uppercase tracking-wider text-neutral-500">카테고리</label>
+                              {!isAddingNewCategory && (
+                                <button
+                                  type="button"
+                                  onClick={() => setIsAddingNewCategory(true)}
+                                  className="text-[10px] text-blue-500 hover:underline font-semibold font-sans flex items-center gap-0.5 cursor-pointer"
+                                >
+                                  <Plus size={10} /> 새 카테고리 추가
+                                </button>
+                              )}
+                            </div>
+
+                            {isAddingNewCategory ? (
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="text"
+                                  placeholder="새 카테고리 입력..."
+                                  value={newCategoryInput}
+                                  onChange={(e) => setNewCategoryInput(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      handleAddCategory();
+                                    }
+                                  }}
+                                  className={`flex-1 px-3 py-2 rounded-xl text-sm font-sans border focus:outline-none ${
+                                    theme === 'light' ? 'bg-white border-neutral-200 focus:border-neutral-900' : 'bg-neutral-900 border-neutral-800 focus:border-white'
+                                  }`}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={handleAddCategory}
+                                  className="px-3 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold rounded-xl font-sans transition-colors cursor-pointer"
+                                >
+                                  저장
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsAddingNewCategory(false);
+                                    setNewCategoryInput('');
+                                  }}
+                                  className="px-3 py-2 bg-neutral-500/10 hover:bg-neutral-500/20 text-neutral-500 text-xs font-semibold rounded-xl font-sans transition-colors cursor-pointer"
+                                >
+                                  취소
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                <select
+                                  value={blogCategory}
+                                  onChange={(e) => setBlogCategory(e.target.value as BlogCategory)}
+                                  className={`w-full px-4 py-3 rounded-xl text-sm font-sans border focus:outline-none ${
+                                    theme === 'light' ? 'bg-white border-neutral-200 focus:border-neutral-950' : 'bg-neutral-900 border-neutral-800 focus:border-white'
+                                  }`}
+                                >
+                                  {categoriesList.map(cat => (
+                                    <option key={cat} value={cat}>
+                                      {cat === '개발일지' ? '개발일지 💻' :
+                                       cat === '일상' ? '일상 ☕' :
+                                       cat === '작품감상평' ? '작품감상평 🎨' :
+                                       `${cat} 🔖`}
+                                    </option>
+                                  ))}
+                                </select>
+
+                                {/* Custom categories delete list */}
+                                {customCategories.length > 0 && (
+                                  <div className="mt-2.5">
+                                    <p className="text-[10px] text-neutral-400 font-mono uppercase tracking-wider mb-1.5">등록된 커스텀 카테고리 (삭제 가능)</p>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {customCategories.map((cat) => (
+                                        <span
+                                          key={cat.id}
+                                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-sans border ${
+                                            theme === 'light'
+                                              ? 'bg-[#FAF9F6] border-neutral-200 text-neutral-700'
+                                              : 'bg-[#222222] border-neutral-800 text-neutral-300'
+                                          }`}
+                                        >
+                                          <span>{cat.name}</span>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDeleteCategory(cat.name)}
+                                            className="p-0.5 rounded hover:bg-red-500/10 text-neutral-400 hover:text-red-500 transition-colors cursor-pointer"
+                                            title="카테고리 삭제"
+                                          >
+                                            <Trash2 size={11} />
+                                          </button>
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
 
                           {/* Final details summary */}
@@ -1744,7 +1934,7 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                       <span className="text-[11px] font-sans">사진 파일 첨부</span>
                     </button>
 
-                    <div className="ml-auto flex items-center gap-1">
+                    <div className="ml-auto flex items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => setShowPreview(prev => !prev)}
@@ -1756,6 +1946,15 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                       >
                         <Eye size={13} />
                         미리보기 {showPreview ? 'ON' : 'OFF'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFullPreviewType('project')}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-sans transition-all cursor-pointer bg-neutral-500/10 text-neutral-400 hover:bg-neutral-500/20 hover:text-inherit"
+                        title="전체화면 미리보기"
+                      >
+                        <Maximize2 size={13} />
+                        크게 보기
                       </button>
                     </div>
                   </div>
@@ -2812,7 +3011,110 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
             </div>
           )}
         </div>
-      </div>
+      </motion.div>
+
+      {/* Live Full Preview Modal Overlay */}
+      <AnimatePresence>
+        {fullPreviewType && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-black/75 backdrop-blur-md z-[110] flex items-center justify-center p-4 md:p-6"
+            onClick={() => setFullPreviewType(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 15, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.95, y: 15, opacity: 0 }}
+              transition={{ type: 'spring', damping: 22, stiffness: 180 }}
+              className={`w-full max-w-5xl h-[85vh] rounded-2xl border flex flex-col overflow-hidden shadow-2xl ${
+                theme === 'light'
+                  ? 'bg-[#FAF9F6] border-neutral-200 text-[#222222]'
+                  : 'bg-[#222222] border-neutral-800 text-[#FAF9F6]'
+              }`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-500/10">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="font-mono text-xs uppercase tracking-widest font-semibold text-emerald-500">
+                    Live Preview Full Window
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-sans px-2 py-0.5 rounded-full border border-neutral-500/20 bg-neutral-500/5 text-neutral-400">
+                    {fullPreviewType === 'blog' ? '블로그 미리보기' : '프로젝트 미리보기'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setFullPreviewType(null)}
+                    className="p-1.5 rounded-lg hover:bg-neutral-500/10 transition-colors text-neutral-400 hover:text-inherit cursor-pointer"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Modal Body */}
+              <div className="flex-1 overflow-y-auto p-6 md:p-8 custom-scrollbar">
+                <div className="max-w-3xl mx-auto space-y-6">
+                  {fullPreviewType === 'blog' ? (
+                    <>
+                      <h1 className="text-3xl font-black font-sans tracking-tight">
+                        {blogTitle || '제목을 입력해 주세요'}
+                      </h1>
+                      <div className="h-[1px] bg-neutral-500/10 w-full" />
+                      {blogContent ? (
+                        <div className="prose dark:prose-invert max-w-none">
+                          <MarkdownRenderer content={blogContent} attachments={blogAttachments} />
+                        </div>
+                      ) : (
+                        <p className="text-neutral-400 text-xs text-center py-12 italic font-sans">
+                          아직 작성된 내용이 없습니다. 본문을 작성해 주세요.
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <h1 className="text-3xl font-black font-sans tracking-tight">
+                        {projectTitle || '제목을 입력해 주세요'}
+                      </h1>
+                      <p className="text-neutral-500 text-sm font-sans">
+                        {projectDescription || '프로젝트 간략 소개글이 아직 없습니다.'}
+                      </p>
+                      <div className="h-[1px] bg-neutral-500/10 w-full" />
+                      {projectContent ? (
+                        <div className="prose dark:prose-invert max-w-none">
+                          <MarkdownRenderer content={projectContent} attachments={projectAttachments} />
+                        </div>
+                      ) : (
+                        <p className="text-neutral-400 text-xs text-center py-12 italic font-sans">
+                          아직 작성된 내용이 없습니다. 본문을 작성해 주세요.
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-6 py-3 border-t border-neutral-500/10 flex items-center justify-between text-xs text-neutral-400 font-mono">
+                <span>배건우 PORTFOLIO STUDIO</span>
+                <button
+                  type="button"
+                  onClick={() => setFullPreviewType(null)}
+                  className="px-4 py-2 rounded-lg bg-neutral-500/10 hover:bg-neutral-500/20 text-neutral-600 dark:text-neutral-300 transition-colors font-sans font-semibold cursor-pointer"
+                >
+                  닫기
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Custom Confirmation Modal */}
       {confirmModal.isOpen && (
@@ -2854,6 +3156,6 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
           </div>
         </div>
       )}
-    </div>
+    </motion.div>
   );
 }

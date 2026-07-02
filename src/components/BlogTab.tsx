@@ -3,7 +3,7 @@ import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { BlogPost, BlogCategory } from '../types';
 import MarkdownRenderer from './MarkdownRenderer';
-import { Calendar, Tag, ArrowLeft, Search, Filter, Sparkles, Image as ImageIcon, X } from 'lucide-react';
+import { Calendar, Tag, ArrowLeft, Search, Filter, Sparkles, Image as ImageIcon, X, ChevronDown, Check } from 'lucide-react';
 
 interface BlogTabProps {
   theme: 'light' | 'dark';
@@ -12,7 +12,9 @@ interface BlogTabProps {
 export default function BlogTab({ theme }: BlogTabProps) {
   const [posts, setPosts] = useState<BlogPost[]>([]);
   const [selectedPost, setSelectedPost] = useState<BlogPost | null>(null);
-  const [selectedCategory, setSelectedCategory] = useState<BlogCategory | '전체'>('전체');
+  const [categories, setCategories] = useState<string[]>(['개발일지', '일상', '작품감상평']);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
@@ -35,15 +37,29 @@ export default function BlogTab({ theme }: BlogTabProps) {
     return () => unsubscribe();
   }, []);
 
-  // Filter posts based on search & category
+  // Subscribe to custom categories in real-time
+  useEffect(() => {
+    const unsubscribeCats = onSnapshot(collection(db, 'categories'), (snapshot) => {
+      if (!snapshot.empty) {
+        const list = snapshot.docs.map(d => d.data().name || d.id);
+        const merged = Array.from(new Set(['개발일지', '일상', '작품감상평', ...list])).filter(Boolean);
+        setCategories(merged);
+      } else {
+        setCategories(['개발일지', '일상', '작품감상평']);
+      }
+    }, (err) => {
+      console.warn('Error listening to categories:', err);
+    });
+    return () => unsubscribeCats();
+  }, []);
+
+  // Filter posts based on search & multi-selected categories
   const filteredPosts = posts.filter(post => {
-    const matchesCategory = selectedCategory === '전체' || post.category === selectedCategory;
+    const matchesCategory = selectedCategories.length === 0 || selectedCategories.includes(post.category);
     const matchesSearch = post.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
                           post.content.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCategory && matchesSearch;
   });
-
-  const categories: (BlogCategory | '전체')[] = ['전체', '개발일지', '일상', '작품감상평'];
 
   if (selectedPost) {
     return (
@@ -205,23 +221,87 @@ export default function BlogTab({ theme }: BlogTabProps) {
           </div>
 
           {/* Filters */}
-          <div className="md:col-span-6 flex flex-wrap gap-2 md:justify-end">
-            {categories.map((cat) => (
+          <div className="md:col-span-6 flex md:justify-end relative">
+            <div className="relative w-full md:w-auto">
               <button
-                id={`filter-${cat}`}
-                key={cat}
-                onClick={() => setSelectedCategory(cat)}
-                className={`px-4 py-2 rounded-xl text-xs font-semibold font-sans border transition-all cursor-pointer ${
-                  selectedCategory === cat
+                id="filter-category-btn"
+                type="button"
+                onClick={() => setIsFilterDropdownOpen(!isFilterDropdownOpen)}
+                className={`w-full md:w-auto px-4 py-3 rounded-xl text-xs font-semibold font-sans border transition-all cursor-pointer flex items-center justify-between md:justify-start gap-2 shadow-sm ${
+                  selectedCategories.length > 0
                     ? (theme === 'light' ? 'bg-[#222222] border-[#222222] text-[#FAF9F6]' : 'bg-[#FAF9F6] border-[#FAF9F6] text-[#222222]')
-                    : (theme === 'light' ? 'border-neutral-200 hover:bg-neutral-100 text-neutral-600' : 'border-neutral-800 hover:bg-neutral-800 text-neutral-400')
+                    : (theme === 'light' ? 'border-neutral-200 hover:bg-neutral-100 text-neutral-600 bg-white' : 'border-neutral-800 hover:bg-neutral-800 text-neutral-400 bg-[#222222]')
                 }`}
               >
-                {cat === '개발일지' ? '💻 개발일지' :
-                 cat === '일상' ? '☕ 일상' :
-                 cat === '작품감상평' ? '🎨 작품감상평' : '모두'}
+                <span className="flex items-center gap-1.5">
+                  <Filter size={13} />
+                  <span>
+                    {selectedCategories.length === 0
+                      ? '모든 카테고리'
+                      : selectedCategories.length === 1
+                      ? selectedCategories[0]
+                      : `${selectedCategories[0]} 외 ${selectedCategories.length - 1}개`}
+                  </span>
+                </span>
+                <ChevronDown size={13} className={`transition-transform ${isFilterDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
-            ))}
+
+              {/* Dropdown Card */}
+              {isFilterDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-[10]" onClick={() => setIsFilterDropdownOpen(false)} />
+                  <div
+                    id="category-filter-dropdown"
+                    className={`absolute right-0 mt-2 w-full md:w-64 rounded-xl border p-2 shadow-xl z-[20] space-y-1 ${
+                      theme === 'light' 
+                        ? 'bg-white border-neutral-200 text-neutral-800' 
+                        : 'bg-neutral-900 border-neutral-800 text-neutral-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between px-3 py-1.5 border-b border-neutral-500/10 mb-1">
+                      <span className="text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider">카테고리 복수 선택</span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCategories([])}
+                        className="text-[10px] text-blue-500 hover:underline font-semibold cursor-pointer"
+                      >
+                        전체 선택 (초기화)
+                      </button>
+                    </div>
+
+                    <div className="max-h-60 overflow-y-auto space-y-0.5 custom-scrollbar">
+                      {categories.map((cat) => {
+                        const isSelected = selectedCategories.includes(cat);
+                        return (
+                          <button
+                            key={cat}
+                            type="button"
+                            onClick={() => {
+                              if (isSelected) {
+                                setSelectedCategories(selectedCategories.filter(c => c !== cat));
+                              } else {
+                                setSelectedCategories([...selectedCategories, cat]);
+                              }
+                            }}
+                            className={`w-full text-left px-3 py-2 rounded-lg text-xs font-sans font-medium flex items-center justify-between transition-colors hover:bg-neutral-500/10 cursor-pointer`}
+                          >
+                            <span className="flex items-center gap-1.5">
+                              <span>
+                                {cat === '개발일지' ? '💻' :
+                                 cat === '일상' ? '☕' :
+                                 cat === '작품감상평' ? '🎨' : '🔖'}
+                              </span>
+                              <span>{cat}</span>
+                            </span>
+                            {isSelected && <Check size={14} className="text-emerald-500 shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>

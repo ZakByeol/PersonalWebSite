@@ -1,4 +1,4 @@
-export type BlogCategory = '개발일지' | '일상' | '작품감상평';
+export type BlogCategory = string;
 
 export interface BlogPost {
   id: string;
