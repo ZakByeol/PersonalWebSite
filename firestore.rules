@@ -36,29 +36,31 @@ service cloud.firestore {
     // 3. Validation Blueprints
     function isValidBlogPost(data) {
       return data.title is string && data.title.size() > 0 && data.title.size() <= 200
-        && data.content is string && data.content.size() <= 50000
+        && data.content is string && data.content.size() <= 200000
         && data.category is string && (data.category == '개발일지' || data.category == '일상' || data.category == '작품감상평')
-        && data.createdAt is int && data.createdAt > 0
-        && ( !('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000) )
+        && (data.createdAt is int || data.createdAt is float) && data.createdAt > 0
+        && ( !('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 1000000) )
         && ( !('tags' in data) || (data.tags is list && data.tags.size() <= 20) )
+        && ( !('attachments' in data) || (data.attachments is list && data.attachments.size() <= 100) )
         && data.keys().hasAll(['title', 'content', 'category', 'createdAt'])
-        && data.keys().size() <= 6;
+        && data.keys().size() <= 8;
     }
 
     function isValidProject(data) {
       return data.title is string && data.title.size() > 0 && data.title.size() <= 200
-        && data.description is string && data.description.size() <= 1000
-        && data.content is string && data.content.size() <= 50000
+        && data.description is string && data.description.size() <= 2000
+        && data.content is string && data.content.size() <= 200000
         && data.techStack is list && data.techStack.size() <= 50
         && data.role is string && data.role.size() <= 200
         && data.period is string && data.period.size() <= 100
-        && data.createdAt is int && data.createdAt > 0
-        && ( !('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000) )
+        && (data.createdAt is int || data.createdAt is float) && data.createdAt > 0
+        && ( !('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 1000000) )
         && ( !('githubUrl' in data) || (data.githubUrl is string && data.githubUrl.size() <= 2000) )
         && ( !('liveUrl' in data) || (data.liveUrl is string && data.liveUrl.size() <= 2000) )
         && ( !('participants' in data) || (data.participants is list && data.participants.size() <= 50) )
+        && ( !('attachments' in data) || (data.attachments is list && data.attachments.size() <= 100) )
         && data.keys().hasAll(['title', 'description', 'content', 'techStack', 'role', 'period', 'createdAt'])
-        && data.keys().size() <= 12;
+        && data.keys().size() <= 13;
     }
 
     function isValidProfile(data) {

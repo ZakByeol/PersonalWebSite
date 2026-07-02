@@ -4,7 +4,7 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Project } from '../types';
 import MarkdownRenderer from './MarkdownRenderer';
 import GithubRepoWidget from './GithubRepoWidget';
-import { ArrowLeft, Github, Globe, Calendar, Briefcase, Search, ArrowRight } from 'lucide-react';
+import { ArrowLeft, Github, Globe, Calendar, Briefcase, Search, ArrowRight, Image as ImageIcon, X } from 'lucide-react';
 
 interface ProjectTabProps {
   theme: 'light' | 'dark';
@@ -15,6 +15,7 @@ export default function ProjectTab({ theme }: ProjectTabProps) {
   const [selectedProj, setSelectedProj] = useState<Project | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
 
   // Subscribe to projects collection
   useEffect(() => {
@@ -148,7 +149,36 @@ export default function ProjectTab({ theme }: ProjectTabProps) {
           </div>
 
           <h3 className="text-xs font-mono uppercase tracking-wider text-neutral-500 mb-4">Project Narrative & Outcome</h3>
-          <MarkdownRenderer content={selectedProj.content} />
+          <MarkdownRenderer content={selectedProj.content} attachments={selectedProj.attachments} />
+
+          {/* Attached Photos Gallery */}
+          {selectedProj.attachments && selectedProj.attachments.length > 0 && (
+            <div className="space-y-4 pt-6 border-t border-neutral-500/15 mt-8 animate-fade-in">
+              <h3 className="text-xs font-mono uppercase tracking-wider text-neutral-500 flex items-center gap-2">
+                <ImageIcon size={14} className="text-neutral-500" />
+                첨부 이미지 ({selectedProj.attachments.length}개)
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                {selectedProj.attachments.map((url, idx) => (
+                  <div 
+                    key={idx}
+                    onClick={() => setLightboxImage(url)}
+                    className="group relative aspect-square rounded-2xl overflow-hidden border border-neutral-500/10 bg-neutral-500/5 shadow-sm hover:shadow-md transition-all cursor-zoom-in"
+                  >
+                    <img
+                      src={url}
+                      alt={`attachment-${idx}`}
+                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <span className="text-white text-[10px] font-sans font-semibold bg-black/60 px-2.5 py-1 rounded-full backdrop-blur-sm">크게 보기</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* GitHub Repository Explorer & Contributors Widget */}
@@ -157,6 +187,30 @@ export default function ProjectTab({ theme }: ProjectTabProps) {
           manualParticipants={selectedProj.participants} 
           theme={theme} 
         />
+
+        {/* Lightbox Modal */}
+        {lightboxImage && (
+          <div 
+            className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center p-4"
+            onClick={() => setLightboxImage(null)}
+          >
+            <button 
+              className="absolute top-6 right-6 text-[#FAF9F6] hover:opacity-75 transition-opacity"
+              onClick={() => setLightboxImage(null)}
+              aria-label="닫기"
+            >
+              <X size={28} />
+            </button>
+            <div className="max-w-5xl max-h-[85vh] overflow-hidden rounded-2xl" onClick={e => e.stopPropagation()}>
+              <img 
+                src={lightboxImage} 
+                alt="Lightbox View" 
+                className="max-w-full max-h-[85vh] object-contain rounded-xl"
+                referrerPolicy="no-referrer" 
+              />
+            </div>
+          </div>
+        )}
       </div>
     );
   }

@@ -3,7 +3,7 @@ import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { BlogPost, BlogCategory } from '../types';
 import MarkdownRenderer from './MarkdownRenderer';
-import { Calendar, Tag, ArrowLeft, Search, Filter, Sparkles } from 'lucide-react';
+import { Calendar, Tag, ArrowLeft, Search, Filter, Sparkles, Image as ImageIcon, X } from 'lucide-react';
 
 interface BlogTabProps {
   theme: 'light' | 'dark';
@@ -15,6 +15,7 @@ export default function BlogTab({ theme }: BlogTabProps) {
   const [selectedCategory, setSelectedCategory] = useState<BlogCategory | '전체'>('전체');
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
 
   // Subscribe to blogs collection
   useEffect(() => {
@@ -100,8 +101,37 @@ export default function BlogTab({ theme }: BlogTabProps) {
         <div className={`p-8 rounded-2xl border ${
           theme === 'light' ? 'bg-white border-neutral-200' : 'bg-neutral-900 border-neutral-800'
         }`}>
-          <MarkdownRenderer content={selectedPost.content} />
+          <MarkdownRenderer content={selectedPost.content} attachments={selectedPost.attachments} />
         </div>
+
+        {/* Attached Photos Gallery */}
+        {selectedPost.attachments && selectedPost.attachments.length > 0 && (
+          <div className="space-y-4 pt-4 animate-fade-in">
+            <h3 className="text-sm font-semibold font-mono uppercase tracking-wider text-neutral-500 flex items-center gap-2">
+              <ImageIcon size={14} className="text-neutral-500" />
+              첨부 이미지 ({selectedPost.attachments.length}개)
+            </h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+              {selectedPost.attachments.map((url, idx) => (
+                <div 
+                  key={idx}
+                  onClick={() => setLightboxImage(url)}
+                  className="group relative aspect-square rounded-2xl overflow-hidden border border-neutral-500/10 bg-neutral-500/5 shadow-sm hover:shadow-md transition-all cursor-zoom-in"
+                >
+                  <img
+                    src={url}
+                    alt={`attachment-${idx}`}
+                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <span className="text-white text-[10px] font-sans font-semibold bg-black/60 px-2.5 py-1 rounded-full backdrop-blur-sm">크게 보기</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Tags */}
         {selectedPost.tags && selectedPost.tags.length > 0 && (
@@ -117,6 +147,30 @@ export default function BlogTab({ theme }: BlogTabProps) {
                 {tag}
               </span>
             ))}
+          </div>
+        )}
+
+        {/* Lightbox Modal */}
+        {lightboxImage && (
+          <div 
+            className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center p-4"
+            onClick={() => setLightboxImage(null)}
+          >
+            <button 
+              className="absolute top-6 right-6 text-[#FAF9F6] hover:opacity-75 transition-opacity"
+              onClick={() => setLightboxImage(null)}
+              aria-label="닫기"
+            >
+              <X size={28} />
+            </button>
+            <div className="max-w-5xl max-h-[85vh] overflow-hidden rounded-2xl" onClick={e => e.stopPropagation()}>
+              <img 
+                src={lightboxImage} 
+                alt="Lightbox View" 
+                className="max-w-full max-h-[85vh] object-contain rounded-xl"
+                referrerPolicy="no-referrer" 
+              />
+            </div>
           </div>
         )}
       </div>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, addDoc, updateDoc, deleteDoc, doc, getDocs, query, orderBy, getDoc, setDoc } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { db, handleFirestoreError, OperationType, storage } from '../firebase';
+import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { BlogPost, Project, BlogCategory, Profile, Milestone } from '../types';
 import { Plus, Edit2, Trash2, X, Sparkles, Check, Newspaper, FolderGit2, User, Bold, Italic, Heading1, Heading2, Code, Quote, Link, Image as ImageIcon, Eye, Camera, Music, Radio, ListMusic, AlertCircle, Briefcase, Upload } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
@@ -45,6 +46,14 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
   const [projectGithub, setProjectGithub] = useState('');
   const [projectLive, setProjectLive] = useState('');
   const [projectParticipants, setProjectParticipants] = useState('');
+
+  // Attachments form states
+  const [blogAttachments, setBlogAttachments] = useState<string[]>([]);
+  const [projectAttachments, setProjectAttachments] = useState<string[]>([]);
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
+  const [isUploadingBlogThumbnail, setIsUploadingBlogThumbnail] = useState(false);
+  const [isUploadingProjectThumbnail, setIsUploadingProjectThumbnail] = useState(false);
+  const [showPreview, setShowPreview] = useState(true);
 
   // Profile form states
   const [profName, setProfName] = useState('배건우');
@@ -227,6 +236,7 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
         category: blogCategory,
         imageUrl: blogImageUrl || 'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?q=80&w=600&auto=format&fit=crop',
         tags: parsedTags,
+        attachments: blogAttachments,
         createdAt: blogId ? blogs.find(b => b.id === blogId)?.createdAt || Date.now() : Date.now(),
       };
 
@@ -275,6 +285,7 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
         githubUrl: projectGithub || '',
         liveUrl: projectLive || '',
         participants: parsedParticipants,
+        attachments: projectAttachments,
         createdAt: projectId ? projects.find(p => p.id === projectId)?.createdAt || Date.now() : Date.now(),
       };
 
@@ -335,6 +346,7 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
     setBlogCategory('개발일지');
     setBlogImageUrl('');
     setBlogTags('');
+    setBlogAttachments([]);
     setShowPublishSheet(false);
   };
 
@@ -350,6 +362,7 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
     setProjectGithub('');
     setProjectLive('');
     setProjectParticipants('');
+    setProjectAttachments([]);
     setShowProjectPublishSheet(false);
   };
 
@@ -361,6 +374,7 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
     setBlogCategory(post.category);
     setBlogImageUrl(post.imageUrl || '');
     setBlogTags(post.tags ? post.tags.join(', ') : '');
+    setBlogAttachments(post.attachments || []);
     setActiveTab('blogs');
     setIsWritingBlog(true);
     document.getElementById('admin-panel-content')?.scrollTo({ top: 0, behavior: 'smooth' });
@@ -378,6 +392,7 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
     setProjectGithub(proj.githubUrl || '');
     setProjectLive(proj.liveUrl || '');
     setProjectParticipants(proj.participants ? proj.participants.join(', ') : '');
+    setProjectAttachments(proj.attachments || []);
     setActiveTab('projects');
     setIsWritingProject(true);
     document.getElementById('admin-panel-content')?.scrollTo({ top: 0, behavior: 'smooth' });
@@ -428,8 +443,8 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
     }
   };
 
-  // Helper function to compress images using HTML Canvas before storing as Base64 in Firestore
-  const compressImage = (file: File, maxWidth: number = 1000, quality: number = 0.7): Promise<string> => {
+  // Helper function to compress images using HTML Canvas before storing as Base64 in Firestore or Firebase Storage
+  const compressImage = (file: File, maxWidth: number = 1000, quality: number = 0.85): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.readAsDataURL(file);
@@ -464,6 +479,38 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
     });
   };
 
+  // Resizes & compresses image, then uploads it to Firebase Storage (or falls back to compressed Base64 dataURL)
+  const processAndUploadImage = async (file: File): Promise<string> => {
+    // 1. HTML5 Canvas Compression (Max width 1000px, high quality JPEG)
+    const compressedDataUrl = await compressImage(file, 1000, 0.85);
+
+    // Timeout helper to prevent long-running hanging requests
+    const timeoutPromise = (ms: number) =>
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Upload timeout')), ms));
+
+    try {
+      // 2. Try to upload to Firebase Storage with a strict 1.5 second timeout
+      const uploadPromise = (async () => {
+        const sanitizedName = file.name.replace(/[^a-zA-Z0-9.]/g, '_');
+        const storagePath = `editor_attachments/${Date.now()}_${sanitizedName}`;
+        const storageRef = ref(storage, storagePath);
+
+        // Upload Base64 Data URL to Storage
+        await uploadString(storageRef, compressedDataUrl, 'data_url');
+        const downloadUrl = await getDownloadURL(storageRef);
+        return downloadUrl;
+      })();
+
+      // Race the upload against the timeout (1500ms)
+      const downloadUrl = await Promise.race([uploadPromise, timeoutPromise(1500)]);
+      return downloadUrl;
+    } catch (err) {
+      console.warn('Firebase Storage upload timed out or failed, falling back to local compressed DataURL:', err);
+      // Fallback: Use the compressed base64 string directly (instantaneous)
+      return compressedDataUrl;
+    }
+  };
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -478,6 +525,110 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
       triggerError('이미지 처리 중 오류가 발생했습니다.');
     } finally {
       setIsCompilingImage(false);
+    }
+  };
+
+  const handleBlogThumbnailChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingBlogThumbnail(true);
+    try {
+      const finalUrl = await processAndUploadImage(file);
+      setBlogImageUrl(finalUrl);
+      triggerNotification('대표 이미지가 성공적으로 업로드되었습니다.');
+    } catch (err) {
+      console.error('Error uploading blog thumbnail:', err);
+      triggerError('대표 이미지 업로드 중 오류가 발생했습니다.');
+    } finally {
+      setIsUploadingBlogThumbnail(false);
+    }
+  };
+
+  const handleProjectThumbnailChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingProjectThumbnail(true);
+    try {
+      const finalUrl = await processAndUploadImage(file);
+      setProjectImageUrl(finalUrl);
+      triggerNotification('대표 이미지가 성공적으로 업로드되었습니다.');
+    } catch (err) {
+      console.error('Error uploading project thumbnail:', err);
+      triggerError('대표 이미지 업로드 중 오류가 발생했습니다.');
+    } finally {
+      setIsUploadingProjectThumbnail(false);
+    }
+  };
+
+  const handleBlogAttachmentChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsUploadingAttachment(true);
+    try {
+      const fileList = Array.from(files) as File[];
+      
+      // Process all files in parallel for maximum speed
+      const results = await Promise.all(
+        fileList.map(async (file) => {
+          const finalUrl = await processAndUploadImage(file);
+          const sanitizedName = file.name.split('.')[0].replace(/[^a-zA-Z0-9가-힣\s_-]/g, '');
+          return { finalUrl, name: sanitizedName || '사진' };
+        })
+      );
+
+      const newAttachments = [...blogAttachments];
+      results.forEach(({ finalUrl, name }) => {
+        const idx = newAttachments.length;
+        newAttachments.push(finalUrl);
+        insertMarkdown('blog-content-input', `![${name}](attach:${idx})`);
+      });
+
+      setBlogAttachments(newAttachments);
+      triggerNotification('모든 사진이 최적화되어 본문에 즉시 삽입되었습니다.');
+    } catch (err) {
+      console.error('Error uploading blog attachment:', err);
+      triggerError('사진 파일 처리 중 오류가 발생했습니다.');
+    } finally {
+      setIsUploadingAttachment(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleProjectAttachmentChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsUploadingAttachment(true);
+    try {
+      const fileList = Array.from(files) as File[];
+      
+      // Process all files in parallel for maximum speed
+      const results = await Promise.all(
+        fileList.map(async (file) => {
+          const finalUrl = await processAndUploadImage(file);
+          const sanitizedName = file.name.split('.')[0].replace(/[^a-zA-Z0-9가-힣\s_-]/g, '');
+          return { finalUrl, name: sanitizedName || '사진' };
+        })
+      );
+
+      const newAttachments = [...projectAttachments];
+      results.forEach(({ finalUrl, name }) => {
+        const idx = newAttachments.length;
+        newAttachments.push(finalUrl);
+        insertMarkdown('proj-content-input', `![${name}](attach:${idx})`);
+      });
+
+      setProjectAttachments(newAttachments);
+      triggerNotification('모든 사진이 최적화되어 본문에 즉시 삽입되었습니다.');
+    } catch (err) {
+      console.error('Error uploading project attachment:', err);
+      triggerError('사진 파일 처리 중 오류가 발생했습니다.');
+    } finally {
+      setIsUploadingAttachment(false);
+      e.target.value = '';
     }
   };
 
@@ -693,13 +844,13 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-lg z-50 flex items-center justify-center p-4 md:p-8">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-md z-50 flex items-center justify-center">
       <div 
         id="admin-management-panel"
-        className={`w-full max-w-5xl h-[90vh] rounded-2xl flex flex-col overflow-hidden border shadow-2xl transition-all duration-300 ${
+        className={`w-full h-full flex flex-col overflow-hidden transition-all duration-300 ${
           theme === 'light' 
-            ? 'bg-[#FAF9F6] border-neutral-200 text-[#222222]' 
-            : 'bg-[#222222] border-neutral-800 text-[#FAF9F6]'
+            ? 'bg-[#FAF9F6] text-[#222222]' 
+            : 'bg-[#222222] text-[#FAF9F6]'
         }`}
       >
         {/* Header */}
@@ -818,9 +969,16 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
         )}
 
         {/* Main Workspace Scrollable */}
-        <div id="admin-panel-content" className="flex-1 overflow-y-auto p-6 md:p-8 space-y-8">
+        <div 
+          id="admin-panel-content" 
+          className={`flex-1 p-6 md:p-8 space-y-6 ${
+            (activeTab === 'blogs' && isWritingBlog) || (activeTab === 'projects' && isWritingProject)
+              ? 'overflow-hidden flex flex-col min-h-0'
+              : 'overflow-y-auto'
+          }`}
+        >
           {activeTab === 'blogs' && (
-            <div className="h-full flex flex-col">
+            <div className="h-full flex flex-col min-h-0 flex-1">
               {!isWritingBlog ? (
                 /* 1. Blog List View */
                 <div className="space-y-6 animate-fade-in">
@@ -919,7 +1077,7 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                 </div>
               ) : (
                 /* 2. Velog-style Split Editor View */
-                <div className="flex flex-col h-[70vh] animate-fade-in relative">
+                <div className="flex flex-col flex-1 min-h-0 animate-fade-in relative">
                   {/* Title & Top section */}
                   <div className="space-y-3 pb-3 border-b border-neutral-500/10">
                     <input
@@ -1008,18 +1166,88 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                     >
                       <Link size={15} />
                     </button>
-                    <button
+                     <button
                       type="button"
-                      onClick={() => insertMarkdown('blog-content-input', '![이미지 설명]', '(https://)')}
-                      className="p-1.5 rounded hover:bg-neutral-500/10 hover:text-inherit cursor-pointer"
-                      title="Image"
+                      onClick={() => document.getElementById('blog-attachment-input')?.click()}
+                      className="p-1.5 rounded hover:bg-neutral-500/10 hover:text-inherit cursor-pointer flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-300 font-semibold"
+                      title="사진 파일 첨부"
                     >
                       <ImageIcon size={15} />
+                      <span className="text-[11px] font-sans">사진 파일 첨부</span>
                     </button>
+
+                    <div className="ml-auto flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setShowPreview(prev => !prev)}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-sans transition-all cursor-pointer ${
+                          showPreview
+                            ? 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
+                            : 'bg-neutral-500/10 text-neutral-400 hover:bg-neutral-500/20'
+                        }`}
+                      >
+                        <Eye size={13} />
+                        미리보기 {showPreview ? 'ON' : 'OFF'}
+                      </button>
+                    </div>
                   </div>
 
+                  <input
+                    id="blog-attachment-input"
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleBlogAttachmentChange}
+                  />
+
+                  {/* Attachment Previews */}
+                  {(blogAttachments.length > 0 || isUploadingAttachment) && (
+                    <div className="py-2.5 px-3 rounded-xl bg-neutral-500/5 border border-neutral-500/10 mt-2 flex flex-col gap-2">
+                      <div className="flex items-center justify-between text-[11px] font-mono text-neutral-400 uppercase tracking-wider">
+                        <span className="flex items-center gap-1">
+                          <ImageIcon size={13} className="text-neutral-500" />
+                          첨부 파일 목록 ({blogAttachments.length}개)
+                        </span>
+                        {isUploadingAttachment && (
+                          <span className="text-amber-500 animate-pulse font-sans">이미지 처리 중...</span>
+                        )}
+                      </div>
+                      
+                      {blogAttachments.length > 0 && (
+                        <div className="flex flex-wrap gap-2.5 max-h-36 overflow-y-auto p-1">
+                          {blogAttachments.map((url, idx) => (
+                            <div key={idx} className="relative group w-16 h-16 rounded-lg overflow-hidden border border-neutral-500/15 bg-neutral-500/5 shrink-0">
+                              <img src={url} alt={`blog-attach-${idx}`} className="w-full h-full object-cover" />
+                              <button
+                                type="button"
+                                onClick={() => setBlogAttachments(prev => prev.filter((_, i) => i !== idx))}
+                                className="absolute top-0.5 right-0.5 p-0.5 bg-black/60 hover:bg-red-600 text-white rounded-full transition-colors"
+                                title="삭제"
+                              >
+                                <X size={10} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  insertMarkdown('blog-content-input', `![사진 ${idx + 1}](attach:${idx})`);
+                                  triggerNotification('본문에 이미지 삽입 완료!');
+                                }}
+                                className="absolute bottom-0 inset-x-0 py-0.5 bg-black/60 hover:bg-black/80 text-[8px] text-white rounded font-sans transition-all text-center opacity-0 group-hover:opacity-100"
+                              >
+                                본문 삽입
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Workspace Grid */}
-                  <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-4 pt-4 min-h-0 overflow-hidden">
+                  <div className={`flex-1 grid gap-4 pt-4 min-h-0 overflow-hidden ${
+                    showPreview ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'
+                  }`}>
                     {/* Write Section */}
                     <div className="flex flex-col h-full">
                       <textarea
@@ -1035,20 +1263,22 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                     </div>
 
                     {/* Preview Section */}
-                    <div className={`hidden lg:flex flex-col h-full p-4 rounded-xl border overflow-y-auto ${
-                      theme === 'light' ? 'bg-white border-neutral-100' : 'bg-neutral-900 border-neutral-850'
-                    }`}>
-                      <div className="text-xs text-neutral-400 font-mono mb-2 uppercase tracking-widest border-b border-neutral-500/10 pb-1 flex items-center gap-1.5">
-                        <Eye size={12} /> Live Preview
+                    {showPreview && (
+                      <div className={`hidden lg:flex flex-col h-full p-4 rounded-xl border overflow-y-auto ${
+                        theme === 'light' ? 'bg-white border-neutral-100' : 'bg-neutral-900 border-neutral-850'
+                      }`}>
+                        <div className="text-xs text-neutral-400 font-mono mb-2 uppercase tracking-widest border-b border-neutral-500/10 pb-1 flex items-center gap-1.5">
+                          <Eye size={12} /> Live Preview
+                        </div>
+                        <div className="flex-1 overflow-y-auto">
+                          {blogContent ? (
+                            <MarkdownRenderer content={blogContent} attachments={blogAttachments} />
+                          ) : (
+                            <p className="text-neutral-400 text-sm font-sans italic">여기에 실시간 미리보기가 표시됩니다.</p>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex-1 overflow-y-auto">
-                        {blogContent ? (
-                          <MarkdownRenderer content={blogContent} />
-                        ) : (
-                          <p className="text-neutral-400 text-sm font-sans italic">여기에 실시간 미리보기가 표시됩니다.</p>
-                        )}
-                      </div>
-                    </div>
+                    )}
                   </div>
 
                   {/* Bottom Action bar */}
@@ -1076,7 +1306,6 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                           alert('내용을 먼저 입력해 주세요.');
                           return;
                         }
-                        // Open the slide-up publish settings
                         setShowPublishSheet(true);
                       }}
                       className={`px-6 py-2.5 rounded-xl text-sm font-sans font-semibold flex items-center gap-2 cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] ${
@@ -1110,24 +1339,44 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                           <div>
                             <label className="block text-xs font-mono uppercase tracking-wider text-neutral-500 mb-2">포스트 대표 이미지 (Thumbnail)</label>
                             <div className="flex gap-4 items-center">
-                              <div className="w-24 h-24 rounded-lg overflow-hidden border border-neutral-500/10 bg-neutral-500/5 shrink-0">
+                              <div className="w-24 h-24 rounded-lg overflow-hidden border border-neutral-500/10 bg-neutral-500/5 shrink-0 relative group">
                                 {blogImageUrl ? (
                                   <img src={blogImageUrl} alt="Thumbnail preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                                 ) : (
                                   <div className="w-full h-full flex items-center justify-center text-[10px] text-neutral-400 font-sans text-center px-2">대표 이미지 없음</div>
                                 )}
+                                {isUploadingBlogThumbnail && (
+                                  <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-[10px] text-white animate-pulse">업로드 중...</div>
+                                )}
                               </div>
-                              <div className="flex-1">
+                              <div className="flex-1 space-y-2">
+                                <div className="flex gap-2">
+                                  <input
+                                    type="text"
+                                    placeholder="https://images.unsplash.com/..."
+                                    value={blogImageUrl}
+                                    onChange={(e) => setBlogImageUrl(e.target.value)}
+                                    className={`flex-1 px-3 py-2 rounded-xl text-xs font-sans border focus:outline-none ${
+                                      theme === 'light' ? 'bg-white border-neutral-200 focus:border-neutral-900' : 'bg-neutral-900 border-neutral-800 focus:border-white'
+                                    }`}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => document.getElementById('blog-thumbnail-file-input')?.click()}
+                                    className="px-3 py-2 bg-neutral-500/10 hover:bg-neutral-500/20 text-xs font-sans font-semibold rounded-xl flex items-center gap-1 shrink-0 transition-colors cursor-pointer"
+                                  >
+                                    <ImageIcon size={13} />
+                                    파일 선택
+                                  </button>
+                                </div>
                                 <input
-                                  type="text"
-                                  placeholder="https://images.unsplash.com/..."
-                                  value={blogImageUrl}
-                                  onChange={(e) => setBlogImageUrl(e.target.value)}
-                                  className={`w-full px-4 py-2.5 rounded-xl text-xs font-sans border focus:outline-none ${
-                                    theme === 'light' ? 'bg-white border-neutral-200 focus:border-neutral-900' : 'bg-neutral-900 border-neutral-800 focus:border-white'
-                                  }`}
+                                  id="blog-thumbnail-file-input"
+                                  type="file"
+                                  accept="image/*"
+                                  className="hidden"
+                                  onChange={handleBlogThumbnailChange}
                                 />
-                                <p className="text-[10px] text-neutral-400 mt-1">포스트의 대표 이미지 URL 주소를 입력해 주세요.</p>
+                                <p className="text-[10px] text-neutral-400">직접 사진 파일을 업로드하거나 대표 이미지 URL 주소를 입력해 주세요.</p>
                               </div>
                             </div>
                           </div>
@@ -1184,7 +1433,7 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
           )}
 
           {activeTab === 'projects' && (
-            <div className="h-full flex flex-col">
+            <div className="h-full flex flex-col min-h-0 flex-1">
               {!isWritingProject ? (
                 /* 1. Project List View */
                 <div className="space-y-6 animate-fade-in">
@@ -1281,7 +1530,7 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                 </div>
               ) : (
                 /* 2. Project Split Editor View */
-                <div className="flex flex-col h-[70vh] animate-fade-in relative">
+                <div className="flex flex-col flex-1 min-h-0 animate-fade-in relative">
                   {/* Title & Top section */}
                   <div className="space-y-3 pb-3 border-b border-neutral-500/10">
                     <input
@@ -1485,18 +1734,88 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                     >
                       <Link size={15} />
                     </button>
-                    <button
+                     <button
                       type="button"
-                      onClick={() => insertMarkdown('proj-content-input', '![이미지 설명]', '(https://)')}
-                      className="p-1.5 rounded hover:bg-neutral-500/10 hover:text-inherit cursor-pointer"
-                      title="Image"
+                      onClick={() => document.getElementById('proj-attachment-input')?.click()}
+                      className="p-1.5 rounded hover:bg-neutral-500/10 hover:text-inherit cursor-pointer flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-300 font-semibold"
+                      title="사진 파일 첨부"
                     >
                       <ImageIcon size={15} />
+                      <span className="text-[11px] font-sans">사진 파일 첨부</span>
                     </button>
+
+                    <div className="ml-auto flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setShowPreview(prev => !prev)}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-sans transition-all cursor-pointer ${
+                          showPreview
+                            ? 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
+                            : 'bg-neutral-500/10 text-neutral-400 hover:bg-neutral-500/20'
+                        }`}
+                      >
+                        <Eye size={13} />
+                        미리보기 {showPreview ? 'ON' : 'OFF'}
+                      </button>
+                    </div>
                   </div>
 
+                  <input
+                    id="proj-attachment-input"
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleProjectAttachmentChange}
+                  />
+
+                  {/* Attachment Previews */}
+                  {(projectAttachments.length > 0 || isUploadingAttachment) && (
+                    <div className="py-2.5 px-3 rounded-xl bg-neutral-500/5 border border-neutral-500/10 mt-2 flex flex-col gap-2">
+                      <div className="flex items-center justify-between text-[11px] font-mono text-neutral-400 uppercase tracking-wider">
+                        <span className="flex items-center gap-1">
+                          <ImageIcon size={13} className="text-neutral-500" />
+                          첨부 파일 목록 ({projectAttachments.length}개)
+                        </span>
+                        {isUploadingAttachment && (
+                          <span className="text-amber-500 animate-pulse font-sans">이미지 처리 중...</span>
+                        )}
+                      </div>
+                      
+                      {projectAttachments.length > 0 && (
+                        <div className="flex flex-wrap gap-2.5 max-h-36 overflow-y-auto p-1">
+                          {projectAttachments.map((url, idx) => (
+                            <div key={idx} className="relative group w-16 h-16 rounded-lg overflow-hidden border border-neutral-500/15 bg-neutral-500/5 shrink-0">
+                              <img src={url} alt={`proj-attach-${idx}`} className="w-full h-full object-cover" />
+                              <button
+                                type="button"
+                                onClick={() => setProjectAttachments(prev => prev.filter((_, i) => i !== idx))}
+                                className="absolute top-0.5 right-0.5 p-0.5 bg-black/60 hover:bg-red-600 text-white rounded-full transition-colors"
+                                title="삭제"
+                              >
+                                <X size={10} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  insertMarkdown('proj-content-input', `![사진 ${idx + 1}](attach:${idx})`);
+                                  triggerNotification('본문에 이미지 삽입 완료!');
+                                }}
+                                className="absolute bottom-0 inset-x-0 py-0.5 bg-black/60 hover:bg-black/80 text-[8px] text-white rounded font-sans transition-all text-center opacity-0 group-hover:opacity-100"
+                              >
+                                본문 삽입
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Workspace Grid */}
-                  <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-4 pt-4 min-h-0 overflow-hidden">
+                  <div className={`flex-1 grid gap-4 pt-4 min-h-0 overflow-hidden ${
+                    showPreview ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'
+                  }`}>
                     {/* Write Section */}
                     <div className="flex flex-col h-full">
                       <textarea
@@ -1506,26 +1825,28 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                         value={projectContent}
                         onChange={(e) => setProjectContent(e.target.value)}
                         className={`w-full flex-1 p-4 rounded-xl text-sm font-mono border focus:outline-none resize-none overflow-y-auto ${
-                          theme === 'light' ? 'bg-white border-neutral-200 focus:border-neutral-350' : 'bg-neutral-900 border-neutral-800 focus:border-neutral-700'
+                          theme === 'light' ? 'bg-white border-neutral-200 focus:border-neutral-350' : 'bg-neutral-900 border-neutral-850 focus:border-neutral-700'
                         }`}
                       />
                     </div>
 
                     {/* Preview Section */}
-                    <div className={`hidden lg:flex flex-col h-full p-4 rounded-xl border overflow-y-auto ${
-                      theme === 'light' ? 'bg-white border-neutral-100' : 'bg-neutral-900 border-neutral-850'
-                    }`}>
-                      <div className="text-xs text-neutral-400 font-mono mb-2 uppercase tracking-widest border-b border-neutral-500/10 pb-1 flex items-center gap-1.5">
-                        <Eye size={12} /> Live Preview
+                    {showPreview && (
+                      <div className={`hidden lg:flex flex-col h-full p-4 rounded-xl border overflow-y-auto ${
+                        theme === 'light' ? 'bg-white border-neutral-100' : 'bg-neutral-900 border-neutral-850'
+                      }`}>
+                        <div className="text-xs text-neutral-400 font-mono mb-2 uppercase tracking-widest border-b border-neutral-500/10 pb-1 flex items-center gap-1.5">
+                          <Eye size={12} /> Live Preview
+                        </div>
+                        <div className="flex-1 overflow-y-auto">
+                          {projectContent ? (
+                            <MarkdownRenderer content={projectContent} attachments={projectAttachments} />
+                          ) : (
+                            <p className="text-neutral-400 text-sm font-sans italic">여기에 실시간 미리보기가 표시됩니다.</p>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex-1 overflow-y-auto">
-                        {projectContent ? (
-                          <MarkdownRenderer content={projectContent} />
-                        ) : (
-                          <p className="text-neutral-400 text-sm font-sans italic">여기에 실시간 미리보기가 표시됩니다.</p>
-                        )}
-                      </div>
-                    </div>
+                    )}
                   </div>
 
                   {/* Bottom Action bar */}
@@ -1632,22 +1953,42 @@ export default function AdminPanel({ onClose, theme }: AdminPanelProps) {
                           <div>
                             <label className="block text-xs font-mono uppercase tracking-wider text-neutral-500 mb-2">대표 이미지 URL (Thumbnail)</label>
                             <div className="flex gap-4 items-center">
-                              <div className="w-16 h-16 rounded-lg overflow-hidden border border-neutral-500/10 bg-neutral-500/5 shrink-0">
+                              <div className="w-16 h-16 rounded-lg overflow-hidden border border-neutral-500/10 bg-neutral-500/5 shrink-0 relative">
                                 {projectImageUrl ? (
                                   <img src={projectImageUrl} alt="Project Cover preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                                 ) : (
                                   <div className="w-full h-full flex items-center justify-center text-[9px] text-neutral-400 font-sans text-center px-1">이미지 없음</div>
                                 )}
+                                {isUploadingProjectThumbnail && (
+                                  <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-[10px] text-white animate-pulse">업로드 중...</div>
+                                )}
                               </div>
-                              <div className="flex-1">
+                              <div className="flex-1 space-y-2">
+                                <div className="flex gap-2">
+                                  <input
+                                    type="text"
+                                    placeholder="https://images.unsplash.com/..."
+                                    value={projectImageUrl}
+                                    onChange={(e) => setProjectImageUrl(e.target.value)}
+                                    className={`flex-1 px-3 py-2 rounded-xl text-xs font-sans border focus:outline-none ${
+                                      theme === 'light' ? 'bg-white border-neutral-200 focus:border-neutral-900' : 'bg-neutral-900 border-neutral-800 focus:border-white'
+                                    }`}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => document.getElementById('project-thumbnail-file-input')?.click()}
+                                    className="px-3 py-2 bg-neutral-500/10 hover:bg-neutral-500/20 text-xs font-sans font-semibold rounded-xl flex items-center gap-1 shrink-0 transition-colors cursor-pointer"
+                                  >
+                                    <ImageIcon size={13} />
+                                    파일 선택
+                                  </button>
+                                </div>
                                 <input
-                                  type="text"
-                                  placeholder="https://images.unsplash.com/..."
-                                  value={projectImageUrl}
-                                  onChange={(e) => setProjectImageUrl(e.target.value)}
-                                  className={`w-full px-3 py-2 rounded-xl text-xs font-sans border focus:outline-none ${
-                                    theme === 'light' ? 'bg-white border-neutral-200 focus:border-neutral-900' : 'bg-neutral-900 border-neutral-800 focus:border-white'
-                                  }`}
+                                  id="project-thumbnail-file-input"
+                                  type="file"
+                                  accept="image/*"
+                                  className="hidden"
+                                  onChange={handleProjectThumbnailChange}
                                 />
                               </div>
                             </div>

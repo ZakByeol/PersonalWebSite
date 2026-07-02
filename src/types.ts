@@ -8,6 +8,7 @@ export interface BlogPost {
   createdAt: number;
   imageUrl?: string;
   tags?: string[];
+  attachments?: string[]; // Array of base64 images
 }
 
 export interface Project {
@@ -23,6 +24,7 @@ export interface Project {
   role: string;
   period: string;
   participants?: string[]; // comma-separated or list of participants
+  attachments?: string[]; // Array of base64 images
 }
 
 export type ActiveTab = 'home' | 'blog' | 'projects' | 'gallery' | 'playlist';
